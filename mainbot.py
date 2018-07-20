@@ -5,9 +5,27 @@ import canarytools
 import requests
 import vta
 import re
+import nmap
+import sys
+import os
+from OTXv2 import OTXv2
+import get_malicious
+import hashlib
 
-VT_API_KEY = "-YOUR VT API KEY HERE-"
-console = canarytools.Console(api_key='-YPUR CANARY API KEY HERE', domain='-YOUR CANARY DOMAIN HERE-')
+VT_API_KEY = "VT KEY HERE"
+# OTX API key
+API_KEY = 'OTX KEY HERE'
+OTX_SERVER = 'https://otx.alienvault.com/'
+otx = OTXv2(API_KEY, server=OTX_SERVER)
+console = canarytools.Console(api_key='canary KEY here', domain='canary domain here')
+try:
+    nm = nmap.PortScanner()         # instantiate nmap.PortScanner object
+except nmap.PortScannerError:
+    print('Nmap not found', sys.exc_info()[0])
+    sys.exit(0)
+except:
+    print("Unexpected error:", sys.exc_info()[0])
+    sys.exit(0)
 
 
 
@@ -24,8 +42,8 @@ def handle_command(slack_api, command, channel):
 			canary_incident_IP = incident.src_host
 			canary_incident_nodis = incident.node_id
 			slack_api.rtm_send_message(channel,'%s -- %s -- %s' %(canary_incident_type,canary_incident_IP,canary_incident_nodis))
-	elif ("https" in command.lower() or ("http" in command.lower() or ("www" in command.lower()))):
-		command = (re.sub("<|>","",command.lower()))
+	elif ("https" in command.lower() or ("http" in command.lower())):
+		command = (re.sub("<|>|\|.*","",command.lower()))
 		print command
 		headers = {
   		"Accept-Encoding": "gzip, deflate",
@@ -37,10 +55,37 @@ def handle_command(slack_api, command, channel):
 		json_response = response.text
 		match = re.search(r'"positives": \w+',json_response)
 		print command +"--"+match.group()
-		vt_result = command +"--"+match.group()
-		slack_api.rtm_send_message(channel,vt_result)
+		vt_result = match.group()
+		print json_response
+		# OTX query
+		alerts = get_malicious.url(otx, command)
+		if len(alerts) > 0:
+			a_result = 'Indetified as potentially malicious'
+		else:
+			a_result = 'Unknown or not identified as malcious'
+		slack_api.rtm_send_message(channel,'VT = %s \n OTX = %s'%(vt_result,a_result))
+	elif ("nmap" in command.lower()):
+		print command.lower()
+		ipaddr = (re.sub("nmap ","",command.lower()))
+		print ipaddr
+		nm.scan(ipaddr,'22')
+		print nm.all_hosts()
+		for host in nm.all_hosts():
+    			print('----------------------------------------------------')
+			print('Host : %s (%s)' % (host, nm[host].hostname()))
+			print('State : %s' % nm[host].state())
+
+			for proto in nm[host].all_protocols():
+				print('----------')
+				print('Protocol : %s' % proto)
+
+				lport = list(nm[host][proto].keys())
+				lport.sort()
+				for port in lport:
+				    print('port : %s\tstate : %s' % (port, nm[host][proto][port]['state']))
+				    slack_api.rtm_send_message(channel,('port : %s\tstate : %s' % (port, nm[host][proto][port]['state'])))
 	elif command.lower().startswith('hello') or command.lower().startswith('hi') or command.lower().startswith('hey') or command.lower().startswith('hello') or command.lower().startswith('who are you'):
-		slack_api.rtm_send_message(channel, 'Hey, I\'m your CSIRT bot, how may I help you?\n use incident CMD to query canary incident.\n use URL start with http or https or www to query URL reputation from VT. ')
+		slack_api.rtm_send_message(channel, 'Hey, I\'m your CSIRT bot, how may I help you?\n > Use incident CMD to query canary incident.\n > Use URL start with http or https or www to query URL reputation from VT. ')
 	else:
 		print 'Invalid Command: Not Understood'
 		slack_api.rtm_send_message(channel, 'Invalid Command: Not Understood')
